@@ -1,0 +1,285 @@
+# Generic retail ontology example for Domain-independent ontology authoring schema 0.1.
+# This contains 9 entities and 5 executable KPIs. It deliberately contains no
+# physical table, column, SQL dialect, or join-key names.
+ontology_id: retail
+ontology_version: "0.1"
+formula_schema_version: "1"
+
+entities:
+  - id: customer
+    entity_type: definition
+    description: A person or organization that can place retail orders.
+    synonyms: [shopper, buyer]
+    identity_attributes: [customer.customer_id]
+    attributes:
+      - id: customer.customer_id
+        role: dimension
+        data_type: string
+      - id: customer.segment
+        role: dimension
+        data_type: string
+        value_map: value_map.customer_segment
+
+  - id: product
+    entity_type: definition
+    description: A sellable product or stock-keeping unit.
+    synonyms: [item, sku]
+    identity_attributes: [product.product_id]
+    attributes:
+      - id: product.product_id
+        role: dimension
+        data_type: string
+      - id: product.category
+        role: dimension
+        data_type: string
+        value_map: value_map.product_category
+      - id: product.brand
+        role: dimension
+        data_type: string
+
+  - id: store
+    entity_type: definition
+    description: A physical or online point of sale.
+    identity_attributes: [store.store_id]
+    attributes:
+      - id: store.store_id
+        role: dimension
+        data_type: string
+      - id: store.region
+        role: dimension
+        data_type: string
+
+  - id: sales_channel
+    entity_type: definition
+    description: The channel through which a customer purchases.
+    synonyms: [channel]
+    identity_attributes: [sales_channel.channel_id]
+    attributes:
+      - id: sales_channel.channel_id
+        role: dimension
+        data_type: string
+        value_map: value_map.sales_channel
+
+  - id: order
+    entity_type: event
+    description: A confirmed retail purchase.
+    synonyms: [purchase, sale]
+    identity_attributes: [order.order_id]
+    time_attributes: [order.ordered_at]
+    attributes:
+      - id: order.order_id
+        role: dimension
+        data_type: string
+      - id: order.ordered_at
+        role: time
+        data_type: datetime
+      - id: order.customer_id
+        role: dimension
+        reference: customer.customer_id
+        data_type: string
+      - id: order.store_id
+        role: dimension
+        reference: store.store_id
+        required: false
+        data_type: string
+      - id: order.channel_id
+        role: dimension
+        reference: sales_channel.channel_id
+        data_type: string
+      - id: order.status
+        role: dimension
+        data_type: string
+        value_map: value_map.order_status
+
+  - id: order_line
+    entity_type: event
+    description: One product line within an order.
+    identity_attributes: [order_line.order_line_id]
+    time_attributes: [order_line.ordered_at]
+    attributes:
+      - id: order_line.order_line_id
+        role: dimension
+        data_type: string
+      - id: order_line.ordered_at
+        role: time
+        data_type: datetime
+      - id: order_line.order_id
+        role: dimension
+        reference: order.order_id
+        data_type: string
+      - id: order_line.product_id
+        role: dimension
+        reference: product.product_id
+        data_type: string
+      - id: order_line.quantity
+        role: measure
+        data_type: integer
+        unit: count
+      - id: order_line.net_amount
+        role: measure
+        data_type: decimal
+        unit: currency
+
+  - id: return
+    entity_type: event
+    description: A product return associated with a completed order line.
+    identity_attributes: [return.return_id]
+    time_attributes: [return.returned_at]
+    attributes:
+      - id: return.return_id
+        role: dimension
+        data_type: string
+      - id: return.returned_at
+        role: time
+        data_type: datetime
+      - id: return.order_line_id
+        role: dimension
+        reference: order_line.order_line_id
+        data_type: string
+      - id: return.reason
+        role: dimension
+        data_type: string
+        value_map: value_map.return_reason
+
+  - id: inventory_snapshot
+    entity_type: event
+    description: Stock availability captured for a product at a store and time.
+    identity_attributes: [inventory_snapshot.snapshot_id]
+    time_attributes: [inventory_snapshot.captured_at]
+    attributes:
+      - id: inventory_snapshot.snapshot_id
+        role: dimension
+        data_type: string
+      - id: inventory_snapshot.captured_at
+        role: time
+        data_type: datetime
+      - id: inventory_snapshot.product_id
+        role: dimension
+        reference: product.product_id
+        data_type: string
+      - id: inventory_snapshot.store_id
+        role: dimension
+        reference: store.store_id
+        data_type: string
+      - id: inventory_snapshot.on_hand_quantity
+        role: measure
+        data_type: integer
+        unit: count
+
+  - id: monthly_target
+    entity_type: target
+    description: Planned monthly revenue for a store and sales channel.
+    identity_attributes: [monthly_target.target_id]
+    time_attributes: [monthly_target.year, monthly_target.month]
+    attributes:
+      - id: monthly_target.target_id
+        role: dimension
+        data_type: string
+      - id: monthly_target.year
+        role: time
+        data_type: integer
+        granularity: year
+      - id: monthly_target.month
+        role: time
+        data_type: integer
+        granularity: month
+      - id: monthly_target.store_id
+        role: dimension
+        reference: store.store_id
+        data_type: string
+      - id: monthly_target.channel_id
+        role: dimension
+        reference: sales_channel.channel_id
+        data_type: string
+      - id: monthly_target.target_revenue
+        role: measure
+        data_type: decimal
+        unit: currency
+
+kpis:
+  - id: orders
+    unit: count
+    description: Distinct confirmed orders.
+    expr_ast:
+      type: agg
+      function: count_distinct
+      scope_entity: order
+      arg: {type: ref, kind: attribute, id: order.order_id}
+
+  - id: net_revenue
+    unit: currency
+    description: Sum of net amounts across ordered product lines.
+    expr_ast:
+      type: agg
+      function: sum
+      scope_entity: order_line
+      arg: {type: ref, kind: attribute, id: order_line.net_amount}
+
+  - id: units_sold
+    unit: count
+    description: Sum of quantities across ordered product lines.
+    expr_ast:
+      type: agg
+      function: sum
+      scope_entity: order_line
+      arg: {type: ref, kind: attribute, id: order_line.quantity}
+
+  - id: average_order_value
+    unit: currency
+    description: Net revenue divided by the number of distinct orders.
+    expr_ast:
+      type: safe_div
+      numerator: {type: ref, kind: kpi, id: net_revenue}
+      denominator: {type: ref, kind: kpi, id: orders}
+      on_zero: null
+
+  - id: return_rate
+    unit: ratio
+    description: Distinct returned order lines divided by distinct ordered lines.
+    expr_ast:
+      type: safe_div
+      numerator:
+        type: agg
+        function: count_distinct
+        scope_entity: return
+        arg: {type: ref, kind: attribute, id: return.order_line_id}
+      denominator:
+        type: agg
+        function: count_distinct
+        scope_entity: order_line
+        arg: {type: ref, kind: attribute, id: order_line.order_line_id}
+      on_zero: null
+
+relationships:
+  - {from: order, relationship: placed_by, to: customer, cardinality: "n:1"}
+  - {from: order, relationship: placed_at, to: store, cardinality: "n:1"}
+  - {from: order, relationship: placed_through, to: sales_channel, cardinality: "n:1"}
+  - {from: order_line, relationship: belongs_to, to: order, cardinality: "n:1"}
+  - {from: order_line, relationship: purchases, to: product, cardinality: "n:1"}
+  - {from: return, relationship: returns, to: order_line, cardinality: "n:1"}
+  - {from: inventory_snapshot, relationship: measures, to: product, cardinality: "n:1"}
+  - {from: inventory_snapshot, relationship: captured_at, to: store, cardinality: "n:1"}
+  - {from: monthly_target, relationship: applies_to, to: store, cardinality: "n:1"}
+  - {from: monthly_target, relationship: applies_to, to: sales_channel, cardinality: "n:1"}
+
+value_maps:
+  - id: value_map.customer_segment
+    reference: customer.segment
+    values: [consumer, business, unknown]
+  - id: value_map.product_category
+    reference: product.category
+    values: [apparel, electronics, grocery, home, other]
+  - id: value_map.sales_channel
+    reference: sales_channel.channel_id
+    values:
+      - web
+      - value: retail_store
+        synonyms: [store, physical store]
+      - value: marketplace
+        synonyms: [third party marketplace]
+  - id: value_map.order_status
+    reference: order.status
+    values: [confirmed, fulfilled, cancelled, refunded]
+  - id: value_map.return_reason
+    reference: return.reason
+    values: [damaged, incorrect_item, no_longer_needed, other]

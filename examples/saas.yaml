@@ -1,0 +1,196 @@
+# Generic SaaS ontology example for Domain-independent ontology authoring schema 0.1.
+# This contains 9 entities and 5 executable KPIs. It deliberately contains no
+# physical table, column, SQL dialect, or join-key names.
+ontology_id: saas
+ontology_version: "0.1"
+formula_schema_version: "1"
+
+entities:
+  - id: account
+    entity_type: definition
+    description: A customer organization that subscribes to the service.
+    synonyms: [customer, organization]
+    identity_attributes: [account.account_id]
+    attributes:
+      - {id: account.account_id, role: dimension, data_type: string}
+      - {id: account.industry, role: dimension, data_type: string, value_map: value_map.account_industry}
+      - {id: account.region, role: dimension, data_type: string}
+
+  - id: user
+    entity_type: definition
+    description: A person who can use the service.
+    identity_attributes: [user.user_id]
+    attributes:
+      - {id: user.user_id, role: dimension, data_type: string}
+      - {id: user.account_id, role: dimension, data_type: string, reference: account.account_id}
+      - {id: user.role, role: dimension, data_type: string, value_map: value_map.user_role}
+
+  - id: workspace
+    entity_type: definition
+    description: A tenant workspace belonging to an account.
+    identity_attributes: [workspace.workspace_id]
+    attributes:
+      - {id: workspace.workspace_id, role: dimension, data_type: string}
+      - {id: workspace.account_id, role: dimension, data_type: string, reference: account.account_id}
+      - {id: workspace.status, role: dimension, data_type: string, value_map: value_map.workspace_status}
+
+  - id: plan
+    entity_type: definition
+    description: A commercial product plan offered to subscribers.
+    identity_attributes: [plan.plan_id]
+    attributes:
+      - {id: plan.plan_id, role: dimension, data_type: string}
+      - {id: plan.plan_name, role: dimension, data_type: string}
+      - {id: plan.billing_interval, role: dimension, data_type: string, value_map: value_map.billing_interval}
+      - {id: plan.list_price, role: measure, data_type: decimal, unit: currency}
+
+  - id: subscription
+    entity_type: event
+    description: A customer commitment to a plan for a period of service.
+    identity_attributes: [subscription.subscription_id]
+    time_attributes: [subscription.started_at, subscription.ended_at]
+    attributes:
+      - {id: subscription.subscription_id, role: dimension, data_type: string}
+      - {id: subscription.account_id, role: dimension, data_type: string, reference: account.account_id}
+      - {id: subscription.plan_id, role: dimension, data_type: string, reference: plan.plan_id}
+      - {id: subscription.started_at, role: time, data_type: datetime}
+      - {id: subscription.ended_at, role: time, data_type: datetime, required: false}
+      - {id: subscription.status, role: dimension, data_type: string, value_map: value_map.subscription_status}
+      - {id: subscription.monthly_recurring_revenue, role: measure, data_type: decimal, unit: currency}
+
+  - id: usage_event
+    entity_type: event
+    description: A recorded use of a service capability.
+    identity_attributes: [usage_event.usage_event_id]
+    time_attributes: [usage_event.occurred_at]
+    attributes:
+      - {id: usage_event.usage_event_id, role: dimension, data_type: string}
+      - {id: usage_event.workspace_id, role: dimension, data_type: string, reference: workspace.workspace_id}
+      - {id: usage_event.user_id, role: dimension, data_type: string, reference: user.user_id, required: false}
+      - {id: usage_event.occurred_at, role: time, data_type: datetime}
+      - {id: usage_event.feature, role: dimension, data_type: string}
+      - {id: usage_event.quantity, role: measure, data_type: integer, unit: count}
+
+  - id: invoice
+    entity_type: event
+    description: A bill issued to an account for service.
+    identity_attributes: [invoice.invoice_id]
+    time_attributes: [invoice.issued_at, invoice.due_at]
+    attributes:
+      - {id: invoice.invoice_id, role: dimension, data_type: string}
+      - {id: invoice.account_id, role: dimension, data_type: string, reference: account.account_id}
+      - {id: invoice.subscription_id, role: dimension, data_type: string, reference: subscription.subscription_id, required: false}
+      - {id: invoice.issued_at, role: time, data_type: datetime}
+      - {id: invoice.due_at, role: time, data_type: datetime}
+      - {id: invoice.status, role: dimension, data_type: string, value_map: value_map.invoice_status}
+      - {id: invoice.amount_due, role: measure, data_type: decimal, unit: currency}
+
+  - id: payment
+    entity_type: event
+    description: A payment recorded against an invoice.
+    identity_attributes: [payment.payment_id]
+    time_attributes: [payment.paid_at]
+    attributes:
+      - {id: payment.payment_id, role: dimension, data_type: string}
+      - {id: payment.invoice_id, role: dimension, data_type: string, reference: invoice.invoice_id}
+      - {id: payment.paid_at, role: time, data_type: datetime}
+      - {id: payment.method, role: dimension, data_type: string, value_map: value_map.payment_method}
+      - {id: payment.amount, role: measure, data_type: decimal, unit: currency}
+
+  - id: monthly_target
+    entity_type: target
+    description: A planned monthly recurring revenue amount for an account.
+    identity_attributes: [monthly_target.target_id]
+    time_attributes: [monthly_target.year, monthly_target.month]
+    attributes:
+      - {id: monthly_target.target_id, role: dimension, data_type: string}
+      - {id: monthly_target.account_id, role: dimension, data_type: string, reference: account.account_id}
+      - {id: monthly_target.year, role: time, data_type: integer, granularity: year}
+      - {id: monthly_target.month, role: time, data_type: integer, granularity: month}
+      - {id: monthly_target.target_mrr, role: measure, data_type: decimal, unit: currency}
+
+kpis:
+  - id: subscriptions
+    unit: count
+    description: Distinct subscription records.
+    expr_ast:
+      type: agg
+      function: count_distinct
+      scope_entity: subscription
+      arg: {type: ref, kind: attribute, id: subscription.subscription_id}
+
+  - id: monthly_recurring_revenue
+    synonyms: [mrr]
+    unit: currency
+    description: Sum of monthly recurring revenue across subscription records.
+    expr_ast:
+      type: agg
+      function: sum
+      scope_entity: subscription
+      arg: {type: ref, kind: attribute, id: subscription.monthly_recurring_revenue}
+
+  - id: usage_events
+    unit: count
+    description: Distinct recorded service usage events.
+    expr_ast:
+      type: agg
+      function: count_distinct
+      scope_entity: usage_event
+      arg: {type: ref, kind: attribute, id: usage_event.usage_event_id}
+
+  - id: invoiced_amount
+    unit: currency
+    description: Sum of amounts due on issued invoices.
+    expr_ast:
+      type: agg
+      function: sum
+      scope_entity: invoice
+      arg: {type: ref, kind: attribute, id: invoice.amount_due}
+
+  - id: payment_collection_rate
+    unit: ratio
+    description: Payments received divided by amounts invoiced.
+    expr_ast:
+      type: safe_div
+      numerator:
+        type: agg
+        function: sum
+        scope_entity: payment
+        arg: {type: ref, kind: attribute, id: payment.amount}
+      denominator: {type: ref, kind: kpi, id: invoiced_amount}
+      on_zero: null
+
+relationships:
+  - {from: user, relationship: belongs_to, to: account, cardinality: "n:1"}
+  - {from: workspace, relationship: belongs_to, to: account, cardinality: "n:1"}
+  - {from: subscription, relationship: subscribed_by, to: account, cardinality: "n:1"}
+  - {from: subscription, relationship: uses, to: plan, cardinality: "n:1"}
+  - {from: usage_event, relationship: occurs_in, to: workspace, cardinality: "n:1"}
+  - {from: usage_event, relationship: performed_by, to: user, cardinality: "n:1"}
+  - {from: invoice, relationship: issued_to, to: account, cardinality: "n:1"}
+  - {from: invoice, relationship: bills, to: subscription, cardinality: "n:1"}
+  - {from: payment, relationship: settles, to: invoice, cardinality: "n:1"}
+  - {from: monthly_target, relationship: applies_to, to: account, cardinality: "n:1"}
+
+value_maps:
+  - id: value_map.account_industry
+    reference: account.industry
+    values: [technology, financial_services, healthcare, retail, other]
+  - id: value_map.user_role
+    reference: user.role
+    values: [admin, member, viewer]
+  - id: value_map.workspace_status
+    reference: workspace.status
+    values: [active, suspended, archived]
+  - id: value_map.billing_interval
+    reference: plan.billing_interval
+    values: [monthly, annual]
+  - id: value_map.subscription_status
+    reference: subscription.status
+    values: [trialing, active, paused, cancelled, expired]
+  - id: value_map.invoice_status
+    reference: invoice.status
+    values: [draft, open, paid, void, uncollectible]
+  - id: value_map.payment_method
+    reference: payment.method
+    values: [card, bank_transfer, wallet, other]
