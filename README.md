@@ -301,6 +301,50 @@ That distinction becomes increasingly important as AI systems move from answerin
 
 ## Using the language
 
+### Validate an ontology
+
+The repository includes a small validator for schema 0.1. It gives one clear
+error per invalid field and exits with `0` for a valid file or `1` otherwise.
+It requires Python 3.9+ and [PyYAML](https://pyyaml.org/):
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Validate an ontology locally:
+
+```powershell
+python tools/validate_ontology.py examples/retail.yaml
+```
+
+The validator checks the document shape, allowed fields, identifiers, entity
+ownership, relationship and value-map references, and canonical Formula AST
+references. Detailed Formula AST type inference and runtime capability checks
+remain the responsibility of a runtime because its supported features are
+implementation-specific.
+
+Use `--fix` to add only missing empty top-level lists. It saves the original
+file as `<file>.bak` and re-formats the YAML. It never guesses IDs, references,
+roles, data types, or Formula AST meanings.
+
+```powershell
+python tools/validate_ontology.py examples/retail.yaml --fix
+```
+
+In CI, validate the committed examples (and any ontology directory added by an
+application):
+
+```powershell
+python tools/validate_ontology.py examples/retail.yaml
+python tools/validate_ontology.py examples/saas.yaml
+```
+
+Run the validator's regression tests before opening a pull request:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
 A typical implementation has three separate layers:
 
 ```text
@@ -343,11 +387,20 @@ A typical repository layout is:
 .
 ├── README.md
 ├── LICENSE
+├── requirements.txt                 # validator dependency
+├── .github/
+│   └── workflows/
+│       └── validate.yml              # pull-request validation
 ├── spec/
 │   └── domain_independent_ontology_authoring_schema_0.1.md
-└── examples/
-    ├── retail.yaml
-    └── saas.yaml
+├── examples/
+│   ├── retail.yaml
+│   └── saas.yaml
+├── tools/
+│   └── validate_ontology.py          # schema 0.1 validator
+└── tests/
+    ├── fixtures/                     # intentionally invalid test inputs
+    └── test_validate_ontology.py
 ```
 
 ## Luke and Valority
