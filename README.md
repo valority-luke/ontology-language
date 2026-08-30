@@ -232,7 +232,9 @@ For example:
       id: orders
 ```
 
-Formula AST provides a constrained, portable expression language for calculations, aggregation, filtering, conditions, date operations, statistics, and analytical functions.
+Formula AST provides a constrained, portable expression language for calculations,
+aggregation, bounded scalar expressions (`least` and `greatest`), filtering,
+conditions, date operations, statistics, and analytical functions.
 
 It intentionally excludes raw SQL and physical table or column references.
 
@@ -318,10 +320,10 @@ python tools/validate_ontology.py examples/retail.yaml
 ```
 
 The validator checks the document shape, allowed fields, identifiers, entity
-ownership, relationship and value-map references, and canonical Formula AST
-references. Detailed Formula AST type inference and runtime capability checks
-remain the responsibility of a runtime because its supported features are
-implementation-specific.
+ownership, relationship and value-map references, KPI dependency cycles, and
+the complete structural contract of every Formula AST node. Formula AST type
+and unit inference, plus runtime capability checks, remain the responsibility
+of a runtime because its supported features are implementation-specific.
 
 Use `--fix` to add only missing empty top-level lists. It saves the original
 file as `<file>.bak` and re-formats the YAML. It never guesses IDs, references,
@@ -344,6 +346,35 @@ Run the validator's regression tests before opening a pull request:
 ```powershell
 python -m unittest discover -s tests -v
 ```
+
+### Compile agent context
+
+The YAML authoring file is the only source of truth. Before an AI agent reads
+an ontology, compile its validated YAML into the compact, read-only Agent
+Ontology DSL:
+
+```text
+YAML authoring source → canonical validation → generated agent context
+```
+
+The compiler does not modify the YAML, execute TypeScript, or create a second
+editable ontology format. Treat its output as generated context: regenerate it
+after every YAML change and do not hand-edit it.
+
+```powershell
+# Print DSL to standard output
+python tools/compile_ontology_dsl.py examples/saas.yaml
+
+# Write DSL to a generated file for an agent integration
+python tools/compile_ontology_dsl.py examples/saas.yaml --output saas.ontology.ts
+```
+
+The compiler imports and uses the same YAML validator, so it emits no DSL for
+an invalid ontology. It exits with `1` and leaves the requested output path
+untouched when validation fails. The DSL is TypeScript-shaped context, not
+executable code; agents and runtimes must parse or consume it as data rather
+than executing it. Its complete contract is in
+[`spec/agent_ontology_dsl_0.1.md`](spec/agent_ontology_dsl_0.1.md).
 
 A typical implementation has three separate layers:
 
@@ -372,6 +403,7 @@ The current version is:
 ```text
 Ontology authoring schema: 0.1
 Formula AST: 1
+Agent Ontology DSL: 0.1 (generated projection)
 Status: early specification
 ```
 
@@ -392,11 +424,13 @@ A typical repository layout is:
 │   └── workflows/
 │       └── validate.yml              # pull-request validation
 ├── spec/
+│   ├── agent_ontology_dsl_0.1.md      # generated agent-context DSL
 │   └── domain_independent_ontology_authoring_schema_0.1.md
 ├── examples/
 │   ├── retail.yaml
 │   └── saas.yaml
 ├── tools/
+│   ├── compile_ontology_dsl.py        # validates YAML, then emits Agent DSL
 │   └── validate_ontology.py          # schema 0.1 validator
 └── tests/
     ├── fixtures/                     # intentionally invalid test inputs

@@ -336,6 +336,25 @@ kpis:
 Formula AST expressions must use canonical attribute/KPI references. Physical
 source binding occurs after semantic validation.
 
+### KPI parameters
+
+Parameter declarations are local to one KPI and are the only names that its
+`param` Formula AST nodes may reference:
+
+```yaml
+parameters:
+  - name: comparison_period
+    data_type: string
+    required: true
+  - name: minimum_order_value
+    data_type: decimal
+    default: 0
+```
+
+Each parameter requires lowercase `name` and a `data_type` from the basic type
+list. It may additionally declare `description`, scalar-or-null `default`, and
+boolean `required`. Parameter names must be unique within their KPI.
+
 ## 9. Formula AST v1 specification
 
 `expr_ast` is a versioned semantic expression tree. It is not SQL and must
@@ -352,7 +371,7 @@ fields must be rejected.
 | Family | Node types |
 | --- | --- |
 | References and literals | `ref`, `value_ref`, `const`, `param`, `base_metric_ref`, `period_ref` |
-| Arithmetic | `add`, `sub`, `mul`, `safe_div`, `mod`, `neg`, `abs`, `round`, `floor`, `ceil`, `power` |
+| Arithmetic | `add`, `sub`, `mul`, `safe_div`, `mod`, `neg`, `abs`, `round`, `floor`, `ceil`, `power`, `least`, `greatest` |
 | Aggregation | `agg`, `filter` |
 | Predicates | `and`, `or`, `not`, `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `is_null`, `is_not_null`, `between`, `like` |
 | Conditional and null | `case`, `coalesce`, `nullif` |
@@ -373,7 +392,8 @@ fields must be rejected.
 {type: period_ref, default: daily | weekly | monthly | quarterly | annual}
 ```
 
-`ref` IDs, `value_ref` IDs, and `param` names must resolve in the ontology.
+`ref` IDs and `value_ref` IDs must resolve in the ontology. `param` names must
+resolve in the enclosing KPI's `parameters` list.
 `const` cannot contain a physical identifier or SQL fragment.
 
 ### 9.3 Arithmetic and aggregation
@@ -384,6 +404,7 @@ fields must be rejected.
 {type: neg | abs | floor | ceil, arg: <expression>}
 {type: round, arg: <expression>, precision: <integer expression>}
 {type: safe_div, numerator: <expression>, denominator: <expression>, on_zero: null | zero | error}
+{type: least | greatest, args: [<expression>, <expression>, ...]}
 
 {type: agg,
  function: sum | avg | min | max | count | count_distinct | bool_and | bool_or,
@@ -397,6 +418,11 @@ fields must be rejected.
 `safe_div` is required instead of ordinary division. `on_zero: null` is the
 default and means no result rather than a fabricated zero. `filter` scopes only
 its input; it does not alter the caller's overall query filters.
+
+`least` returns the lowest and `greatest` the highest of their compatible
+arguments. Both return null when any argument is null; use `coalesce` first
+when a different null policy is intended. They are scalar operations and do
+not replace `min` or `max` aggregation.
 
 ### 9.4 Predicates and `if / else`
 
@@ -499,6 +525,13 @@ offset: <optional non-negative integer> # lag/lead
 default: <optional expression>          # lag/lead
 ```
 
+`partition_by`, `order_by`, and `frame` are optional. When supplied,
+`partition_by` contains only attribute `ref` nodes; `order_by` is non-empty and
+every item states `input`, `direction`, and `nulls`; and `frame` states `kind`,
+`start`, and `end`. `offset` and `default` are allowed only for `lag` and
+`lead`. Every window function except `row_number`, `rank`, and `dense_rank`
+requires `input`.
+
 ### 9.8 Evaluation stages and specialized analytics
 
 | Stage | Examples | Rule |
@@ -509,7 +542,33 @@ default: <optional expression>          # lag/lead
 
 `moving_average`, `run_rate_projection`, and `target_progress` are named,
 typed contracts for analytics that cannot safely be inferred from generic SQL
-syntax. They may be used only when the active runtime explicitly supports them.
+syntax. They may be used only when the active runtime explicitly supports them:
+
+```yaml
+{type: moving_average,
+ input: <numeric expression>,
+ periods: <positive integer>,
+ order_by: {input: <expression>, direction: asc | desc, nulls: first | last},
+ partition_by: <optional list of attribute refs>}
+
+{type: run_rate_projection,
+ observed: <numeric expression>,
+ elapsed: <positive numeric expression>,
+ total: <positive numeric expression>,
+ on_zero: <optional null | zero | error>}
+
+{type: target_progress,
+ actual: <numeric expression>,
+ target: <numeric expression>,
+ on_zero: <optional null | zero | error>}
+```
+
+`moving_average` is the mean of the current and preceding `periods - 1` rows,
+ordered by `order_by` within each partition. `run_rate_projection` is
+`observed / elapsed * total`; `target_progress` is `actual / target`.
+`elapsed`, `total`, and `target` may not be zero at runtime; `on_zero` controls
+the result when they are. Numeric compatibility and runtime support remain a
+capability/type-validation concern.
 
 ### 9.9 Runtime capability gate
 
@@ -546,9 +605,13 @@ Before publishing, validate all of the following:
    attribute must declare granularity.
 8. Every relationship endpoint names an existing entity and uses a valid
    cardinality.
-9. Each KPI has an executable Formula AST with only supported runtime
-   capabilities.
-10. The document contains no physical source/table/column/join definitions.
+9. Each KPI Formula AST node has exactly the fields required by its node type;
+   all references, value-map values, parameters, enum arguments, cardinality,
+   window metadata, specialized-analytics contracts, and KPI dependency cycles
+   validate structurally.
+10. Each Formula AST uses only supported runtime capabilities and has
+    type-/unit-compatible expressions for its target runtime.
+11. The document contains no physical source/table/column/join definitions.
 
 ## 11. Minimal valid example
 
