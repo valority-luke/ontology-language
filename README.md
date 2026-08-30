@@ -33,6 +33,8 @@ The goal is simple:
 
 > Define business meaning once, then map it to whatever data sources and applications need to use it.
 
+For a practical introduction to this idea, see [Teach AI Your Business](https://valority.ai/blog/teach-ai-your-business).
+
 ## What the language describes
 
 An ontology contains four main kinds of business knowledge.
@@ -459,6 +461,8 @@ Good areas for discussion include:
 - interoperability with existing semantic and data platforms.
 
 Please open an issue before proposing substantial changes to the language so the design and compatibility implications can be discussed first.
+
+For collaboration, implementation support, or general questions, [contact Valority](https://valority.ai/Contact).
 
 ## License
 
