@@ -58,6 +58,11 @@ WINDOW_FUNCTIONS = AGGREGATE_FUNCTIONS | {
     "row_number", "rank", "dense_rank", "lag", "lead", "variance", "stddev",
     "median", "percentile", "covariance", "correlation",
 }
+# KPI parameter types follow the Luke runtime contract (formula_schema.py /
+# publisher_schema.py). `kpi` binds a KPI id, `enum` requires `allowed`, and
+# `int` is the spelling the Luke runtime documents use for an integer input.
+PARAMETER_TYPES = TYPES | {"kpi", "enum", "int"}
+RUN_RATE_METHODS = {"period_to_date"}
 ZERO_BEHAVIORS = {None, "zero", "error"}
 STATISTICAL_POPULATIONS = {"sample", "population"}
 PERCENTILE_METHODS = {"continuous", "discrete"}
@@ -120,7 +125,7 @@ def validate(path, fix=False):
     relationships = data.get("relationships", []) if isinstance(data.get("relationships"), list) else []
 
     entity_ids, attribute_ids, attributes, kpi_ids, value_map_ids = set(), set(), {}, set(), set()
-    kpi_parameters, value_map_values = {}, {}
+    kpi_parameters, value_map_values, kpi_defaults = {}, {}, []
     for i, entity in enumerate(entities):
         label = f"entities[{i}]"
         if not isinstance(entity, dict):
@@ -194,9 +199,14 @@ def validate(path, fix=False):
             _unique(kpi_ids, kpi_id, f"{label}.id", "KPI", report)
         if kpi.get("unit") not in UNITS | {"varies"}:
             report.error(f"{label}.unit", "is required and must be a supported unit")
-        kpi_parameters[kpi_id] = _validate_parameters(kpi.get("parameters"), label, report)
+        kpi_parameters[kpi_id] = _validate_parameters(kpi.get("parameters"), label, report, kpi_defaults)
         if not isinstance(kpi.get("expr_ast"), dict) or not kpi["expr_ast"].get("type"):
             report.error(f"{label}.expr_ast", "is required and must be a Formula AST object with a type")
+
+    # A `kpi` parameter default names another KPI, so it resolves only after every KPI id is known.
+    for path, default in kpi_defaults:
+        if default not in kpi_ids:
+            report.error(f"{path}.default", "must resolve to an existing KPI for a kpi parameter")
 
     for i, value_map in enumerate(value_maps):
         label = f"value_maps[{i}]"
@@ -284,8 +294,12 @@ def _reject_unknown_fields(obj, allowed, label, report):
         report.error(f"{label}.{key}", "is not defined by schema 0.1")
 
 
-def _validate_parameters(parameters, label, report):
-    """Validate KPI parameter declarations and return their resolvable names."""
+def _validate_parameters(parameters, label, report, kpi_defaults):
+    """Validate KPI parameter declarations and return their resolvable names.
+
+    `kpi`-typed defaults are appended to ``kpi_defaults`` and resolved by the
+    caller once every KPI id is known.
+    """
     if parameters is None:
         return set()
     if not isinstance(parameters, list):
@@ -297,16 +311,30 @@ def _validate_parameters(parameters, label, report):
         if not isinstance(parameter, dict):
             report.error(path, "must be an object")
             continue
-        _reject_unknown_fields(parameter, {"name", "data_type", "description", "default", "required"}, path, report)
+        _reject_unknown_fields(parameter, {"name", "type", "description", "default", "required", "allowed"}, path, report)
         name = _required_identifier(parameter, "name", path, report, simple=True)
         if name:
             _unique(names, name, f"{path}.name", "parameter", report)
-        if parameter.get("data_type") not in TYPES:
-            report.error(f"{path}.data_type", f"is required and must be one of {', '.join(sorted(TYPES))}")
+        parameter_type = parameter.get("type")
+        if parameter_type not in PARAMETER_TYPES:
+            report.error(f"{path}.type", f"is required and must be one of {', '.join(sorted(PARAMETER_TYPES))}")
         if "required" in parameter and not isinstance(parameter["required"], bool):
             report.error(f"{path}.required", "must be a boolean")
         if "default" in parameter and not _is_scalar(parameter["default"]):
             report.error(f"{path}.default", "must be a scalar or null")
+        allowed = parameter.get("allowed")
+        if "allowed" in parameter:
+            if not isinstance(allowed, list) or not allowed or not all(_is_scalar(item) and item is not None for item in allowed):
+                report.error(f"{path}.allowed", "must be a non-empty list of scalars")
+                allowed = None
+            elif len({repr(item) for item in allowed}) != len(allowed):
+                report.error(f"{path}.allowed", "must not repeat a value")
+        elif parameter_type == "enum":
+            report.error(f"{path}.allowed", "is required for an enum parameter")
+        if isinstance(allowed, list) and parameter.get("default") is not None and parameter["default"] not in allowed:
+            report.error(f"{path}.default", "must be one of the allowed values")
+        if parameter_type == "kpi" and "default" in parameter:
+            kpi_defaults.append((path, parameter["default"]))
     return names
 
 
@@ -594,20 +622,40 @@ def _validate_ast(node, path, attributes, kpi_ids, entity_ids, value_map_values,
     if node_type == "window":
         _validate_window(node, path, attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report)
         return
+    # The three specialized nodes follow the Luke runtime contract
+    # (Luke-knowledge service/app/formula_schema.py): the runtime owns the
+    # windowing, period and target-lookup semantics, so the node names its
+    # inputs rather than spelling out generic arithmetic.
     if node_type == "moving_average":
-        _validate_moving_average(node, path, attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report)
+        fields({"type", "base_metric", "window_days"})
+        expr("base_metric"); expr("window_days")
         return
     if node_type == "run_rate_projection":
-        fields({"type", "observed", "elapsed", "total"}, {"on_zero"})
-        expr("observed"); expr("elapsed"); expr("total")
-        if "on_zero" in node and node["on_zero"] not in ZERO_BEHAVIORS:
-            report.error(f"{path}.on_zero", "must be null, zero, or error")
+        fields({"type", "method", "period", "base_metric"})
+        if node.get("method") not in RUN_RATE_METHODS:
+            report.error(f"{path}.method", f"must be one of {', '.join(sorted(RUN_RATE_METHODS))}")
+        expr("period"); expr("base_metric")
         return
     if node_type == "target_progress":
-        fields({"type", "actual", "target"}, {"on_zero"})
-        expr("actual"); expr("target")
-        if "on_zero" in node and node["on_zero"] not in ZERO_BEHAVIORS:
-            report.error(f"{path}.on_zero", "must be null, zero, or error")
+        fields({"type", "period", "actual_metric", "target_entity", "target_measure", "scope_keys"})
+        period = node.get("period")
+        if isinstance(period, dict):
+            expr("period")
+        elif "period" in node and period not in PERIOD_DEFAULTS:
+            report.error(f"{path}.period", f"must be one of {', '.join(sorted(PERIOD_DEFAULTS))} or a period_ref")
+        if "target_entity" in node and node["target_entity"] not in entity_ids:
+            report.error(f"{path}.target_entity", "must resolve to an existing entity")
+        if "target_measure" in node and node["target_measure"] not in attributes:
+            report.error(f"{path}.target_measure", "must resolve to an existing attribute")
+        scope_keys = node.get("scope_keys")
+        if "scope_keys" in node:
+            if not isinstance(scope_keys, list):
+                report.error(f"{path}.scope_keys", "must be a list of attribute ids")
+            else:
+                for index, key in enumerate(scope_keys):
+                    if not isinstance(key, str) or key not in attributes:
+                        report.error(f"{path}.scope_keys[{index}]", "must resolve to an existing attribute")
+        expr("actual_metric")
 
 
 def _ast_fields(node, path, required, optional, report):
@@ -669,19 +717,6 @@ def _validate_window(node, path, attributes, kpi_ids, entity_ids, value_map_valu
         report.error(path, "offset and default are allowed only for lag or lead")
     if "default" in node:
         _validate_ast(node["default"], f"{path}.default", attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report)
-
-
-def _validate_moving_average(node, path, attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report):
-    _ast_fields(node, path, {"type", "input", "periods", "order_by"}, {"partition_by"}, report)
-    _validate_ast(node.get("input"), f"{path}.input", attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report)
-    if isinstance(node.get("periods"), bool) or not isinstance(node.get("periods"), int) or node["periods"] < 1:
-        report.error(f"{path}.periods", "must be a positive integer")
-    order_by = node.get("order_by")
-    if not isinstance(order_by, dict):
-        report.error(f"{path}.order_by", "must be an order-by object")
-    else:
-        _validate_order_by([order_by], f"{path}.order_by", attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report)
-    _validate_partition_by(node.get("partition_by"), f"{path}.partition_by", attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report)
 
 
 def _validate_partition_by(value, path, attributes, kpi_ids, entity_ids, value_map_values, parameter_names, report):

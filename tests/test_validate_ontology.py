@@ -185,6 +185,91 @@ value_maps: []
         self.assertIn("denominator: is required", result.stdout)
         self.assertIn("unexpected: is not defined by schema 0.1", result.stdout)
 
+    def test_specialized_kpis_follow_the_runtime_contract(self):
+        fixture = ROOT / "tests" / "fixtures" / "specialized_kpis.yaml"
+        result = self.run_validator(fixture)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        compiled = subprocess.run(
+            [sys.executable, str(COMPILER), str(fixture)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        self.assertIn('expr: movingAverage(baseMetric("revenue"), param("window_days"))', compiled.stdout)
+        self.assertIn('expr: runRateProjection("period_to_date", period("monthly"), baseMetric("revenue"))', compiled.stdout)
+        self.assertIn('expr: targetProgress(baseMetric("revenue"), {', compiled.stdout)
+        self.assertIn('scopeKeys: [attr("store.store_id")]', compiled.stdout)
+
+    def test_validator_rejects_superseded_specialized_shapes_and_bad_parameters(self):
+        source = """\
+ontology_id: test
+ontology_version: "0.1"
+formula_schema_version: "1"
+entities:
+  - id: order
+    entity_type: event
+    identity_attributes: [order.order_id]
+    attributes:
+      - {id: order.order_id, role: dimension, data_type: string}
+      - {id: order.amount, role: measure, data_type: decimal, unit: currency}
+kpis:
+  - id: revenue
+    unit: currency
+    expr_ast: {type: agg, function: sum, scope_entity: order, arg: {type: ref, kind: attribute, id: order.amount}}
+  - id: old_moving_average
+    unit: currency
+    parameters:
+      - {name: window, data_type: integer}
+      - {name: period, type: enum}
+      - {name: base, type: kpi, default: missing_kpi}
+      - {name: size, type: int, default: 3, allowed: [7, 14]}
+    expr_ast:
+      type: moving_average
+      input: {type: ref, kind: kpi, id: revenue}
+      periods: 3
+      order_by: {input: {type: ref, kind: attribute, id: order.order_id}, direction: asc, nulls: last}
+  - id: bad_run_rate
+    unit: currency
+    expr_ast:
+      type: run_rate_projection
+      method: linear
+      period: {type: period_ref, default: monthly}
+      base_metric: {type: base_metric_ref, default: revenue}
+  - id: bad_target_progress
+    unit: ratio
+    expr_ast:
+      type: target_progress
+      period: fortnightly
+      actual_metric: {type: base_metric_ref, default: revenue}
+      target_entity: missing_entity
+      target_measure: order.missing
+      scope_keys: [order.missing]
+relationships: []
+value_maps: []
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old-specialized.yaml"
+            path.write_text(source, encoding="utf-8")
+            result = self.run_validator(path)
+        self.assertEqual(result.returncode, 1)
+        for expected in (
+            "parameters[0].data_type: is not defined by schema 0.1",
+            "parameters[0].type: is required",
+            "parameters[1].allowed: is required for an enum parameter",
+            "parameters[2].default: must resolve to an existing KPI",
+            "parameters[3].default: must be one of the allowed values",
+            "expr_ast.base_metric: is required",
+            "expr_ast.window_days: is required",
+            "expr_ast.periods: is not defined by schema 0.1",
+            "expr_ast.method: must be one of period_to_date",
+            "expr_ast.period: must be one of annual, daily, monthly, quarterly, weekly or a period_ref",
+            "expr_ast.target_entity: must resolve to an existing entity",
+            "expr_ast.target_measure: must resolve to an existing attribute",
+            "expr_ast.scope_keys[0]: must resolve to an existing attribute",
+        ):
+            self.assertIn(expected, result.stdout)
+
     def test_validator_rejects_cyclic_kpi_references(self):
         source = """\
 ontology_id: test
@@ -252,9 +337,9 @@ value_maps: []
             "mode": {"type": "mode", "input": const, "tie_break": "min"},
             "z_score": {"type": "z_score", "input": const, "mean": const, "stddev": const, "on_zero_stddev": None},
             "window": {"type": "window", "function": "rank", "order_by": [order_by]},
-            "moving_average": {"type": "moving_average", "input": const, "periods": 3, "order_by": order_by},
-            "run_rate_projection": {"type": "run_rate_projection", "observed": const, "elapsed": const, "total": const},
-            "target_progress": {"type": "target_progress", "actual": const, "target": const},
+            "moving_average": {"type": "moving_average", "base_metric": {"type": "base_metric_ref", "default": "revenue"}, "window_days": {"type": "param", "name": "window_days"}},
+            "run_rate_projection": {"type": "run_rate_projection", "method": "period_to_date", "period": {"type": "period_ref", "default": "monthly"}, "base_metric": {"type": "base_metric_ref", "default": "revenue"}},
+            "target_progress": {"type": "target_progress", "period": "monthly", "actual_metric": {"type": "base_metric_ref", "default": "revenue"}, "target_entity": "monthly_target", "target_measure": "monthly_target.target_amount", "scope_keys": ["store.store_id"]},
         }
         self.assertEqual(set(nodes), AST_NODE_TYPES)
         for node_type, node in nodes.items():

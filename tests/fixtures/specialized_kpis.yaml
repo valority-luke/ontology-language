@@ -1,0 +1,75 @@
+ontology_id: specialized_retail
+ontology_version: "0.1"
+formula_schema_version: "1"
+entities:
+  - id: store
+    entity_type: definition
+    identity_attributes: [store.store_id]
+    attributes:
+      - {id: store.store_id, role: dimension, data_type: string}
+      - {id: store.region, role: dimension, data_type: string}
+  - id: sale
+    entity_type: event
+    identity_attributes: [sale.sale_id]
+    time_attributes: [sale.sold_on]
+    attributes:
+      - {id: sale.sale_id, role: dimension, data_type: string}
+      - {id: sale.store_id, role: dimension, data_type: string, reference: store.store_id}
+      - {id: sale.sold_on, role: time, data_type: date}
+      - {id: sale.amount, role: measure, data_type: decimal, unit: currency}
+  - id: monthly_target
+    entity_type: target
+    identity_attributes: [monthly_target.store_id, monthly_target.year, monthly_target.month]
+    time_attributes: [monthly_target.year, monthly_target.month]
+    attributes:
+      - {id: monthly_target.store_id, role: dimension, data_type: string, reference: store.store_id}
+      - {id: monthly_target.year, role: time, data_type: integer, granularity: year}
+      - {id: monthly_target.month, role: time, data_type: integer, granularity: month}
+      - {id: monthly_target.target_amount, role: measure, data_type: decimal, unit: currency}
+kpis:
+  - id: revenue
+    unit: currency
+    description: Sum of sale amounts.
+    expr_ast:
+      type: agg
+      function: sum
+      scope_entity: sale
+      arg: {type: ref, kind: attribute, id: sale.amount}
+  - id: moving_average
+    unit: varies
+    description: Average daily value of an additive base KPI over the preceding complete days.
+    parameters:
+      - {name: base_metric, type: kpi, default: revenue}
+      - {name: window_days, type: int, default: 7, allowed: [7, 14, 28]}
+      - {name: as_of_date, type: date, default: yesterday}
+    expr_ast:
+      type: moving_average
+      base_metric: {type: base_metric_ref, default: revenue}
+      window_days: {type: param, name: window_days}
+  - id: run_rate
+    unit: varies
+    description: Projected full-period value of an additive base KPI from period-to-date pace.
+    parameters:
+      - {name: base_metric, type: kpi, default: revenue}
+      - {name: period, type: enum, default: monthly, allowed: [monthly, annual]}
+    expr_ast:
+      type: run_rate_projection
+      method: period_to_date
+      period: {type: period_ref, default: monthly}
+      base_metric: {type: base_metric_ref, default: revenue}
+  - id: mtd_vs_target
+    unit: ratio
+    description: Month-to-date revenue divided by the matching monthly target.
+    parameters:
+      - {name: actual_metric, type: kpi, default: revenue}
+    expr_ast:
+      type: target_progress
+      period: monthly
+      actual_metric: {type: base_metric_ref, default: revenue}
+      target_entity: monthly_target
+      target_measure: monthly_target.target_amount
+      scope_keys: [store.store_id]
+relationships:
+  - {from: sale, relationship: sold_at, to: store, cardinality: "n:1"}
+  - {from: monthly_target, relationship: applies_to, to: store, cardinality: "n:1"}
+value_maps: []
