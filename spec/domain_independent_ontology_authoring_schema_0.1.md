@@ -343,17 +343,35 @@ Parameter declarations are local to one KPI and are the only names that its
 
 ```yaml
 parameters:
-  - name: comparison_period
-    data_type: string
-    required: true
+  - name: base_metric
+    type: kpi
+    default: revenue
+  - name: window_days
+    type: int
+    default: 7
+    allowed: [7, 14, 28]
+  - name: period
+    type: enum
+    default: monthly
+    allowed: [monthly, annual]
   - name: minimum_order_value
-    data_type: decimal
+    type: decimal
     default: 0
 ```
 
-Each parameter requires lowercase `name` and a `data_type` from the basic type
-list. It may additionally declare `description`, scalar-or-null `default`, and
-boolean `required`. Parameter names must be unique within their KPI.
+Each parameter requires a lowercase `name` and a `type`. `type` is one of the
+basic data types, `int` (the integer spelling used by the runtime contract),
+`kpi` (the value is a KPI id), or `enum` (the value is one of `allowed`). A
+parameter may additionally declare `description`, scalar-or-null `default`,
+boolean `required`, and `allowed`, a non-empty list of distinct scalars.
+`allowed` is required for `enum`. When `allowed` is present, a non-null
+`default` must be one of its values. A `kpi` default must resolve to a KPI in
+the document. Other defaults are not type-checked; a runtime may accept
+symbolic defaults such as `yesterday` for a `date`. Parameter names must be
+unique within their KPI.
+
+These rules follow the runtime formula contract that consumes the parameters
+(Luke-knowledge `service/app/formula_schema.py` and `publisher_schema.py`).
 
 ## 9. Formula AST v1 specification
 
@@ -546,29 +564,36 @@ syntax. They may be used only when the active runtime explicitly supports them:
 
 ```yaml
 {type: moving_average,
- input: <numeric expression>,
- periods: <positive integer>,
- order_by: {input: <expression>, direction: asc | desc, nulls: first | last},
- partition_by: <optional list of attribute refs>}
+ base_metric: <expression, normally a base_metric_ref>,
+ window_days: <expression, normally a param or integer const>}
 
 {type: run_rate_projection,
- observed: <numeric expression>,
- elapsed: <positive numeric expression>,
- total: <positive numeric expression>,
- on_zero: <optional null | zero | error>}
+ method: period_to_date,
+ period: <expression, normally a period_ref>,
+ base_metric: <expression, normally a base_metric_ref>}
 
 {type: target_progress,
- actual: <numeric expression>,
- target: <numeric expression>,
- on_zero: <optional null | zero | error>}
+ period: daily | weekly | monthly | quarterly | annual | <period_ref>,
+ actual_metric: <expression, normally a base_metric_ref>,
+ target_entity: <entity id>,
+ target_measure: <attribute id>,
+ scope_keys: [<attribute id>, ...]}
 ```
 
-`moving_average` is the mean of the current and preceding `periods - 1` rows,
-ordered by `order_by` within each partition. `run_rate_projection` is
-`observed / elapsed * total`; `target_progress` is `actual / target`.
-`elapsed`, `total`, and `target` may not be zero at runtime; `on_zero` controls
-the result when they are. Numeric compatibility and runtime support remain a
-capability/type-validation concern.
+`moving_average` is the average daily value of an additive base KPI over the
+`window_days` complete days before the evaluation date. `run_rate_projection`
+projects the full-period value of an additive base KPI from its settled
+period-to-date pace; `period_to_date` is the only method. `target_progress` is
+the period-to-date `actual_metric` divided by `target_measure` on the
+`target_entity` rows of the matching period, aligned on `scope_keys`. The
+runtime owns calendar, settlement, and zero-target behavior; these nodes name
+their inputs and do not encode that behavior in generic arithmetic. Numeric
+compatibility and runtime support remain a capability/type-validation concern.
+
+This shape is the runtime formula contract of Luke-knowledge
+(`service/app/formula_schema.py`). It replaces the earlier
+`input`/`periods`/`order_by`, `observed`/`elapsed`/`total`, and
+`actual`/`target` shapes, which no runtime implemented.
 
 ### 9.9 Runtime capability gate
 
@@ -580,8 +605,9 @@ statistical method, window behavior, or dialect feature.
 ```yaml
 formula_capabilities:
   formula_schema_version: "1"
-  supported_node_types: [ref, const, agg, mul, safe_div]
-  supported_aggregate_functions: [sum, count_distinct]
+  supported_node_types: [ref, const, param, base_metric_ref, period_ref, agg, mul, safe_div,
+                         moving_average, run_rate_projection, target_progress]
+  supported_aggregate_functions: [sum, count, count_distinct]
   supported_dialects: [postgres]
 ```
 

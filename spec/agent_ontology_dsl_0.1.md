@@ -206,12 +206,14 @@ window("sum" | "avg" | "min" | "max" | "count" | "count_distinct" | "bool_and" |
   default?: expression,
 })
 
-movingAverage(input, periods, {
-  orderBy: { input: expression, direction: "asc" | "desc", nulls: "first" | "last" },
-  partitionBy?: [attr("...")],
+movingAverage(baseMetric, windowDays)
+runRateProjection("period_to_date", period, baseMetric)
+targetProgress(actualMetric, {
+  period: "daily" | "weekly" | "monthly" | "quarterly" | "annual" | period("..."),
+  targetEntity: "<entity id>",
+  targetMeasure: attr("..."),
+  scopeKeys: [attr("...")],
 })
-runRateProjection(observed, elapsed, total, { onZero?: null | "zero" | "error" })
-targetProgress(actual, target, { onZero?: null | "zero" | "error" })
 ```
 
 The DSL helper names are serialization notation, not functions supplied by a

@@ -207,20 +207,17 @@ def _render_ast(node):
                 properties.append((_camel_case(key), _render_ast(value)))
         return _call("window", _literal(node["function"]), _object(properties, 0))
     if node_type == "moving_average":
-        properties = [("orderBy", _render_ast(node["order_by"]))]
-        if "partition_by" in node:
-            properties.append(("partitionBy", _render_ast(node["partition_by"])))
-        return _call("movingAverage", _render_ast(node["input"]), _literal(node["periods"]), _object(properties, 0))
+        return _call("movingAverage", _render_ast(node["base_metric"]), _render_ast(node["window_days"]))
     if node_type == "run_rate_projection":
-        args = [_render_ast(node["observed"]), _render_ast(node["elapsed"]), _render_ast(node["total"])]
-        if "on_zero" in node:
-            args.append(_inline_object([("onZero", _literal(node["on_zero"]))]))
-        return _call("runRateProjection", *args)
+        return _call("runRateProjection", _literal(node["method"]), _render_ast(node["period"]), _render_ast(node["base_metric"]))
     if node_type == "target_progress":
-        args = [_render_ast(node["actual"]), _render_ast(node["target"])]
-        if "on_zero" in node:
-            args.append(_inline_object([("onZero", _literal(node["on_zero"]))]))
-        return _call("targetProgress", *args)
+        properties = [
+            ("period", _render_ast(node["period"])),
+            ("targetEntity", _literal(node["target_entity"])),
+            ("targetMeasure", _call("attr", _literal(node["target_measure"]))),
+            ("scopeKeys", "[" + ", ".join(_call("attr", _literal(key)) for key in node["scope_keys"]) + "]"),
+        ]
+        return _call("targetProgress", _render_ast(node["actual_metric"]), _object(properties, 0))
 
     raise ValueError(f"Formula AST node '{node_type}' has no Agent DSL renderer")
 
